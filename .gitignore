@@ -255,3 +255,7 @@ poetry.toml
 
 # LSP config files
 pyrightconfig.json
+
+# local
+firebase-key.json
+*.pt

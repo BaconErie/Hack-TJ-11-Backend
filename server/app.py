@@ -1,7 +1,8 @@
 from flask import Flask
 from dotenv import load_dotenv
 
-import image
+import nutrition
+from utils.firebase import FirebaseController
 
 def init() -> Flask:
     load_dotenv()
@@ -9,7 +10,10 @@ def init() -> Flask:
     app = Flask(__name__)
     app.config.from_pyfile("settings.py", silent=True)
     
-    app.register_blueprint(image.bp)
+    app.register_blueprint(nutrition.bp)
+
+    conn = FirebaseController(app.config.get("FIREBASE_KEY_PATH", ""))
+    app.firebase = conn
 
     return app
 
