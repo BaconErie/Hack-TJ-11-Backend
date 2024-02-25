@@ -1,11 +1,10 @@
 import requests
 import os 
-import cv2
 from ultralytics import YOLO
 from functools import cache
 from pytesseract import image_to_string
 from PIL import Image
-import io
+from io import BytesIO
 
 from settings import UPLOAD_PATH, MODEL_PATH
 
@@ -27,32 +26,32 @@ def run_inference(image: str) -> set[str]:
         delete_upload = True
     
     model: YOLO = get_or_initialize_model()
-    result = model.predict(f"{UPLOAD_PATH}/{image}")[0]
+    result = model.predict(f"{UPLOAD_PATH}/{image}.png")[0]
     boxes = result.boxes
     
-    identified_item_names: set[str] = set()
+    ingredient_names: set[str] = set()
 
     for box in boxes:
-        if box.conf[0].item() >= 0.5: # Only add boxes that are more than 50% confident
-            box_type_name: str = result.names(box.cls[0].item())
-            identified_item_names.add(box_type_name)
+        # need >=50% confidence level
+        if box.conf[0].item() >= 0.5: 
+            box_name: str = result.names(box.cls[0].item())
+            ingredient_names.add(box_name)
 
-    pil_image: Image = Image.fromarray(result.plot()[:, :, ::-1])
+    img: Image = Image.fromarray(result.plot()[:, :, ::-1])
 
-    image_jpeg_bytesIO: io.BytesIO = io.BytesIO()
-    pil_image.save(image_jpeg_bytesIO, format="JPEG")
+    img_bytes: BytesIO = BytesIO()
+    img.save(img_bytes, format="JPEG")
     
     if delete_upload:
         # delete the upload afterwards
-        os.remove(f"{UPLOAD_PATH}/{image}")
+        os.remove(f"{UPLOAD_PATH}/{image}.png")
 
-    image_jpeg_bytes: bytes = image_jpeg_bytesIO.getvalue()
+    img_bytes: bytes = img_bytes.getvalue()
 
-    f = open('../boxes/image_boxes.jpg', 'wb')
-    f.write(image_jpeg_bytes)
-    f.close()
+    with open(f"boxes/{image}_boxes.jpg", "wb") as file:
+        file.write(img_bytes)
 
-    return identified_item_names
+    return ingredient_names
 
 def scan_image(image: str):
     '''
@@ -64,15 +63,18 @@ def scan_image(image: str):
     if image.startswith("http"):
         image = upload_file_from_url(image)
         delete_upload = True
+
+    img = Image.open(f"{UPLOAD_PATH}/{image}.png")
+    img = img.convert("L")
+    img = img.resize((2000, 2000))
     
-    img: cv2.Mat = cv2.imread(f"{UPLOAD_PATH}/{image}")
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
+    img = filter_scanned_image(img)
+
     text = image_to_string(img, lang="eng")
 
     if delete_upload:
         # delete the upload afterwards
-        os.remove(f"{UPLOAD_PATH}/{image}")
+        os.remove(f"{UPLOAD_PATH}/{image}.png")
 
     return text
 
@@ -81,8 +83,64 @@ def upload_file_from_url(url: str):
     image_data = requests.get(url).content
     filename = str(hash(url))
 
-    if not os.path.exists(f"{UPLOAD_PATH}/{filename}"):
-        with open(f"{UPLOAD_PATH}/{filename}", "wb") as file:
+    if not os.path.exists(f"{UPLOAD_PATH}/{filename}.png"):
+        with open(f"{UPLOAD_PATH}/{filename}.png", "wb") as file:
             file.write(image_data)
     
     return filename
+
+def filter_scanned_image(img: Image):
+    cutoff_black = 160
+    cutoff_white = 200
+
+    px = img.load()
+    px2 = img.copy().load()
+
+    for r in range(img.size[0]):
+        for c in range(img.size[1]):
+            if px2[r,c] >= cutoff_white:
+                px[r,c] = 255
+            elif px2[r,c] <= cutoff_black:
+                px[r,c] = 0
+            else:
+                if 0 < r < img.size[0]-1 and 0 < c < img.size[1]-1:
+                    if max(px2[r-1,c], px2[r+1,c], px2[r,c-1], px2[r,c+1]) > px2[r,c] + 10:
+                        px[r,c] = 0
+                    else:
+                        px[r,c] = 255
+                else:
+                    # somehow?
+                    px[r,c] = 255
+    
+    px2 = img.copy().load()
+    rseen = set()
+
+    for r in range(img.size[0]):
+        for c in range(img.size[1]):
+            if px2[r,c] <= cutoff_black and not (r,c) in rseen:
+                cseen = set()
+                q = [(r,c)]
+
+                while q:
+                    qr, qc = q.pop()
+                    if px2[qr,qc] <= cutoff_white and not (qr,qc) in cseen:
+                        cseen.add(qr,qc)
+                        rseen.add(qr,qc)
+
+                        if qc != 0:
+                            q.append((qr, qc-1))
+                        if qc != img.size[1]-1:
+                            q.append((qr, qc+1))
+                        if qr != 0:
+                            q.append((qr-1, qc))
+                        if qr != img.size[0]-1:
+                            q.append((qr+1, qc))
+                
+                if len(cseen) > 25000:
+                    for qr,qc in cseen:
+                        px[qr,qc] = 255
+                if len(cseen) < 20:
+                    for qr,qc in cseen:
+                        px[qr,qc] = 255
+    
+    return img

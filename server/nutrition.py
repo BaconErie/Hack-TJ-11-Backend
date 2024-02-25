@@ -16,7 +16,7 @@ def calculate_bmr(age: int, height: int, weight: int, sex: str) -> float:
                  6.23 * weight) -
                  6.8 * age) + 66
     
-def harris_benedict(age: int, height: int, weight: int, sex: str, activity: str) -> float:
+def harris_benedict(age: int, height: int, weight: int, sex: str, activity: str) -> int:
     '''
     harris_benedict returns a float that represents the 
     result of the Harris Benedict equation by using the
@@ -25,11 +25,9 @@ def harris_benedict(age: int, height: int, weight: int, sex: str, activity: str)
     bmr = calculate_bmr(age, height, weight, sex)
 
     match activity:
-        case "low":
-            bmr *= 1.2
         case "medium":
-            bmr *= 1.55 
+            bmr *= 1.3
         case "high":
-            bmr *= 1.725
+            bmr *= 1.6
     
-    return bmr
+    return int(bmr)
