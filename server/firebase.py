@@ -25,7 +25,9 @@ class FirebaseController():
             doc = self.outputs.document()
         elif collection.lower() == "ingredients":
             doc = user.collection("ingredients").document()
-        
+        elif collection.lower() == "recipes":
+            doc = user.collection("recipes").document()
+
         doc.set(value)
     
     def listen_to_status(self, *args) -> None:
@@ -47,15 +49,20 @@ class FirebaseController():
         task = doc.get("task")
         
         match task:
-            case "ocr":
+            case "receipt":
+                id = doc.get("item")
                 link: str = doc.get("link")
-                text: str = scan_image(link)
-                
-                value: dict = {
-                    "result": text
-                }
+                words: set[str] = scan_image(link)
+                udoc: DocumentReference = self.users.document(id)
 
-                self.add_document("outputs", value)
+                for word in words:
+                    value: dict = {
+                        "name": word
+                    }
+
+                    self.add_document("ingredients", value, udoc)
+                
+                self.generate_recipes(udoc, words)
             case "ingredients":
                 id = doc.get("item")
                 link: str = doc.get("link")
@@ -69,28 +76,7 @@ class FirebaseController():
                     
                     self.add_document("ingredients", value, udoc)
                 
-                recipe_path = "/".join(ingredients)
-                recipe_url = f"{RECIPE_API_BASE}/api/recipes/{recipe_path}{RECIPE_API_OPTIONS}"
-
-                response = requests.get(recipe_url, headers={"Referer": f"{RECIPE_API_BASE}"})
-                response = response.json()
-                
-                for info in response["recipes"]:
-                    recipe_id = info["id"]
-                    calorie_url = f"{RECIPE_API_BASE}/api/recipe/info/{recipe_id}"
-                        
-                    recipe_response = requests.get(calorie_url, headers={"Referer": f"{RECIPE_API_BASE}"})
-                    recipe_response = recipe_response.json()
-
-                    calorie_count = float(recipe_response["recipe"]["nutrients"]["calories"])
-
-                    value = {
-                        "name": info["title"],
-                        "url": info["url"],
-                        "calories": calorie_count
-                    }
-                    
-                    self.add_document("recipes", value, udoc)
+                self.generate_recipes(udoc, ingredients)
             case "bmr":
                 id = doc.get("item")
                 udoc: DocumentReference = self.users.document(id)
@@ -129,3 +115,96 @@ class FirebaseController():
                 udict["dailycalories"] = bmr
                 udict["progress"] = progress
                 udoc.update(udict)
+            case "recipe":
+                id = doc.get("item")
+                udoc: DocumentReference = self.users.document(id)
+                try:
+                    amount = doc.get("amount")
+                except:
+                    amount = 3
+
+                docs: list[DocumentSnapshot] = udoc.collection("ingredients").get()
+                ingredients: set[str] = set()
+
+                for ingredient in docs:
+                    ingredients.add(ingredient.get("name"))
+                
+                self.generate_recipes(udoc, ingredients, amount)
+            case "calories":
+                id = doc.get("item")
+                add_cals = int(doc.get("addcalories"))
+                udoc: DocumentReference = self.users.document(id)
+                user: DocumentSnapshot = udoc.get()
+                udict: dict = user.to_dict()
+                
+                try:
+                    calories = user.get("calories")
+                except:
+                    calories = 0
+                    udict["calories"] = 0
+                udict["calories"] = calories+add_cals
+                calories = udict["calories"]
+                progress: float = (1.0*calories)/(1.0*udict["dailycalories"])
+
+                # fit to [0,1]
+                if progress > 1: 
+                    progress = 1
+                elif progress < 0:
+                    progress = 0
+
+                udict["progress"] = progress
+                udoc.update(udict)
+    
+    def generate_recipes(self, udoc: DocumentReference, ingredients: set[str], amount=3):
+        old_recipes: list[DocumentSnapshot] = udoc.collection("recipes").get()
+        for recipe in old_recipes:
+            recipe.reference.delete()
+
+        plural_dict = {
+            'apple': 'apples',
+            'banana': 'bananas',
+            'beet': 'beets',
+            'carrot': 'carrots',
+            'cucumber': 'cucumbers',
+            'egg': 'eggs',
+            'eggplant': 'eggplants',
+            'onion': 'onions',
+            'potato': 'potatoes',
+            'tomato': 'tomatoes',
+            'orange': 'orange'
+        }
+
+        new_ingredients = []
+        for ingredient in ingredients:
+            if ingredient in plural_dict.keys():
+                new_ingredients.append(plural_dict[ingredient])
+            else:
+                new_ingredients.append(ingredient)
+        
+        ingredients = new_ingredients
+
+        recipe_path = "/".join(ingredients)
+        recipe_url = f"{RECIPE_API_BASE}/api/recipes/{recipe_path}{RECIPE_API_OPTIONS}{amount}"
+
+        response = requests.get(recipe_url, headers={"Referer": f"{RECIPE_API_BASE}"})
+        response = response.json()
+        
+        for info in response["recipes"]:
+            recipe_id = info["id"]
+            calorie_url = f"{RECIPE_API_BASE}/api/recipe/info/{recipe_id}"
+                
+            recipe_response = requests.get(calorie_url, headers={"Referer": f"{RECIPE_API_BASE}"})
+            recipe_response = recipe_response.json()
+
+            calorie_count = int(float(recipe_response["recipe"]["nutrients"]["calories"]))
+
+            value = {
+                "name": info["title"],
+                "url": info["url"],
+                "calories": calorie_count
+            }
+            
+            self.add_document("recipes", value, udoc)
+        
+        if len(response["recipes"]) == 0:
+            self.add_document("recipes", {"name": "No recipes found", "url": "", "calories": 0}, udoc)

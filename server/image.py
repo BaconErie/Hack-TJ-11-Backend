@@ -6,7 +6,7 @@ from pytesseract import image_to_string
 from PIL import Image
 from io import BytesIO
 
-from settings import UPLOAD_PATH, MODEL_PATH
+from settings import UPLOAD_PATH, MODEL_PATH, FOOD_SET
 
 @cache
 def get_or_initialize_model() -> YOLO:
@@ -34,7 +34,7 @@ def run_inference(image: str) -> set[str]:
     for box in boxes:
         # need >=50% confidence level
         if box.conf[0].item() >= 0.5: 
-            box_name: str = result.names(box.cls[0].item())
+            box_name: str = result.names[box.cls[0].item()]
             ingredient_names.add(box_name)
 
     img: Image = Image.fromarray(result.plot()[:, :, ::-1])
@@ -55,9 +55,10 @@ def run_inference(image: str) -> set[str]:
 
 def scan_image(image: str):
     '''
-    scan_image returns a str that represents text found in the
-    image -- it does this by converting the image into grayscale
-    and then collapses it into only two colors: black and white 
+    scan_image returns a list[str] that represents all the food
+    found in the image -- it does this by filtering the image,
+    passing it through Tesseract OCR, then uses the edit distance 
+    to fix any inconsistences
     '''
     delete_upload = False
     if image.startswith("http"):
@@ -71,12 +72,27 @@ def scan_image(image: str):
     img = filter_scanned_image(img)
 
     text = image_to_string(img, lang="eng")
-
+    text = text.replace("\n", " ")
+    
+    words: set = set()
+    for line in text.split():
+        if not line.strip(): continue
+        line = line.strip().lower()
+        best = (1000, "")
+        
+        for word in FOOD_SET:
+            if len(line) >= len(word):
+                value = (levenshtein_distance(line, word), word)
+                if value < best:
+                    best = value
+            if best[0] <= 1:
+                words.add("-".join(best[1].split(" ")))
+    
     if delete_upload:
         # delete the upload afterwards
         os.remove(f"{UPLOAD_PATH}/{image}.png")
 
-    return text
+    return words
 
 # util
 def upload_file_from_url(url: str):
@@ -89,7 +105,13 @@ def upload_file_from_url(url: str):
     
     return filename
 
-def filter_scanned_image(img: Image):
+def filter_scanned_image(img: Image) -> Image:
+    '''
+    filter_scanned_image returns an PIL Image that
+    represents the original img collapsed to only
+    two colors: black and white -- makes it easier
+    for Tesseract OCR to read the text 
+    '''
     cutoff_black = 160
     cutoff_white = 200
 
@@ -124,8 +146,8 @@ def filter_scanned_image(img: Image):
                 while q:
                     qr, qc = q.pop()
                     if px2[qr,qc] <= cutoff_white and not (qr,qc) in cseen:
-                        cseen.add(qr,qc)
-                        rseen.add(qr,qc)
+                        cseen.add((qr,qc))
+                        rseen.add((qr,qc))
 
                         if qc != 0:
                             q.append((qr, qc-1))
@@ -144,3 +166,26 @@ def filter_scanned_image(img: Image):
                         px[qr,qc] = 255
     
     return img
+
+def levenshtein_distance(word, other) -> int:
+    '''
+    levenshtein_distance calculates the edit distance
+    of word and other -- helps detect malformed words 
+    by Tesseract OCR
+    '''
+    matrix = [[0] * (len(other) + 1) for _ in range(len(word) + 1)]
+
+    for i in range(len(word) + 1):
+        matrix[i][0] = i
+    for j in range(len(other) + 1):
+        matrix[0][j] = j
+
+    for i in range(1, len(word) + 1):
+        for j in range(1, len(other) + 1):
+            cost = 0 if word[i - 1] == other[j - 1] else 1
+            matrix[i][j] = min(matrix[i-1][j] + 1,         # deletion
+                               matrix[i][j-1] + 1,         # insertion
+                               matrix[i-1][j-1] + cost)   # substitution
+
+    distance = matrix[len(word)][len(other)]
+    return distance

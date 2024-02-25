@@ -259,3 +259,4 @@ pyrightconfig.json
 # local
 firebase-key.json
 *.pt
+ingredients.txt
