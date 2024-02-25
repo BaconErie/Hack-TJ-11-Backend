@@ -1,10 +1,11 @@
-from flask import Blueprint, jsonify
-
-bp = Blueprint("nutrition", __name__, url_prefix="/nutrition")
-
-def calculate_bmr(age: int, height: int, weight: int, sex: str) -> int:
-    height = height * 2.5
-    sex = sex.lower().trim()
+def calculate_bmr(age: int, height: int, weight: int, sex: str) -> float:
+    '''
+    calculate_bmr returns an float that represents the
+    BMR of the user -- age must be of type int in years, 
+    height must be of type int in inches, weight must be of
+    type in pounds, and sex must be of type "female" | "male"
+    '''
+    sex = sex.lower().strip()
 
     if sex == "female":
         return ((4.7 * height +
@@ -14,29 +15,21 @@ def calculate_bmr(age: int, height: int, weight: int, sex: str) -> int:
         return ((12.7 * height +
                  6.23 * weight) -
                  6.8 * age) + 66
-
-@bp.route("/bmr/<age>/<height>/<weight>/<sex>")
-def bmr(age, height, weight, sex):
-    response = {}
     
-    try:
-        age = int(age)
-        height = int(height)
-        weight = int(weight)
-        sex = str(sex) 
-        
-        if not sex: #moment ok dude
-            response["success"] = False
-            response["message"] = "Missing value: 'sex'"
-            return jsonify(response)
-    except: 
-        response["success"] = False
-        response["message"] = "An unexpected error occurred!"
-        return jsonify(response)
-
+def harris_benedict(age: int, height: int, weight: int, sex: str, activity: str) -> float:
+    '''
+    harris_benedict returns a float that represents the 
+    result of the Harris Benedict equation by using the
+    BMR of the user 
+    '''
     bmr = calculate_bmr(age, height, weight, sex)
+
+    match activity:
+        case "low":
+            bmr *= 1.2
+        case "medium":
+            bmr *= 1.55 
+        case "high":
+            bmr *= 1.725
     
-    response["success"] = True
-    response["result"] = bmr
-    
-    return jsonify(response)
+    return bmr
